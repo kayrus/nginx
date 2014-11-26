@@ -17,10 +17,10 @@
 typedef struct ngx_http_log_op_s  ngx_http_log_op_t;
 
 typedef u_char *(*ngx_http_log_op_run_pt) (ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op);
+    ngx_http_log_op_t *op, ngx_uint_t json);
 
 typedef size_t (*ngx_http_log_op_getlen_pt) (ngx_http_request_t *r,
-    uintptr_t data);
+    uintptr_t data, ngx_uint_t json);
 
 
 struct ngx_http_log_op_s {
@@ -67,6 +67,7 @@ typedef struct {
     time_t                      disk_full_time;
     time_t                      error_log_time;
     ngx_http_log_fmt_t         *format;
+    ngx_uint_t                  json;
 } ngx_http_log_t;
 
 
@@ -105,31 +106,31 @@ static void ngx_http_log_flush(ngx_open_file_t *file, ngx_log_t *log);
 static void ngx_http_log_flush_handler(ngx_event_t *ev);
 
 static u_char *ngx_http_log_pipe(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op);
+    ngx_http_log_op_t *op, ngx_uint_t json);
 static u_char *ngx_http_log_time(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op);
+    ngx_http_log_op_t *op, ngx_uint_t json);
 static u_char *ngx_http_log_iso8601(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op);
+    ngx_http_log_op_t *op, ngx_uint_t json);
 static u_char *ngx_http_log_msec(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op);
+    ngx_http_log_op_t *op, ngx_uint_t json);
 static u_char *ngx_http_log_request_time(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op);
+    ngx_http_log_op_t *op, ngx_uint_t json);
 static u_char *ngx_http_log_status(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op);
+    ngx_http_log_op_t *op, ngx_uint_t json);
 static u_char *ngx_http_log_bytes_sent(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op);
+    ngx_http_log_op_t *op, ngx_uint_t json);
 static u_char *ngx_http_log_body_bytes_sent(ngx_http_request_t *r,
-    u_char *buf, ngx_http_log_op_t *op);
+    u_char *buf, ngx_http_log_op_t *op, ngx_uint_t json);
 static u_char *ngx_http_log_request_length(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op);
+    ngx_http_log_op_t *op, ngx_uint_t json);
 
 static ngx_int_t ngx_http_log_variable_compile(ngx_conf_t *cf,
     ngx_http_log_op_t *op, ngx_str_t *value);
 static size_t ngx_http_log_variable_getlen(ngx_http_request_t *r,
-    uintptr_t data);
+    uintptr_t data, ngx_uint_t json);
 static u_char *ngx_http_log_variable(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op);
-static uintptr_t ngx_http_log_escape(u_char *dst, u_char *src, size_t size);
+    ngx_http_log_op_t *op, ngx_uint_t json);
+static uintptr_t ngx_http_log_escape(u_char *dst, u_char *src, size_t size, ngx_uint_t json);
 
 
 static void *ngx_http_log_create_main_conf(ngx_conf_t *cf);
@@ -275,7 +276,7 @@ ngx_http_log_handler(ngx_http_request_t *r)
         op = log[l].format->ops->elts;
         for (i = 0; i < log[l].format->ops->nelts; i++) {
             if (op[i].len == 0) {
-                len += op[i].getlen(r, op[i].data);
+                len += op[i].getlen(r, op[i].data, log[l].json);
 
             } else {
                 len += op[i].len;
@@ -305,7 +306,7 @@ ngx_http_log_handler(ngx_http_request_t *r)
                 }
 
                 for (i = 0; i < log[l].format->ops->nelts; i++) {
-                    p = op[i].run(r, p, &op[i]);
+                    p = op[i].run(r, p, &op[i], log[l].json);
                 }
 
                 ngx_linefeed(p);
@@ -328,7 +329,7 @@ ngx_http_log_handler(ngx_http_request_t *r)
         p = line;
 
         for (i = 0; i < log[l].format->ops->nelts; i++) {
-            p = op[i].run(r, p, &op[i]);
+            p = op[i].run(r, p, &op[i], log[l].json);
         }
 
         ngx_linefeed(p);
@@ -704,7 +705,7 @@ ngx_http_log_flush_handler(ngx_event_t *ev)
 
 static u_char *
 ngx_http_log_copy_short(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op)
+    ngx_http_log_op_t *op, ngx_uint_t json)
 {
     size_t     len;
     uintptr_t  data;
@@ -723,14 +724,14 @@ ngx_http_log_copy_short(ngx_http_request_t *r, u_char *buf,
 
 static u_char *
 ngx_http_log_copy_long(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op)
+    ngx_http_log_op_t *op, ngx_uint_t json)
 {
     return ngx_cpymem(buf, (u_char *) op->data, op->len);
 }
 
 
 static u_char *
-ngx_http_log_pipe(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op)
+ngx_http_log_pipe(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op, ngx_uint_t json)
 {
     if (r->pipeline) {
         *buf = 'p';
@@ -743,21 +744,21 @@ ngx_http_log_pipe(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op)
 
 
 static u_char *
-ngx_http_log_time(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op)
+ngx_http_log_time(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op, ngx_uint_t json)
 {
     return ngx_cpymem(buf, ngx_cached_http_log_time.data,
                       ngx_cached_http_log_time.len);
 }
 
 static u_char *
-ngx_http_log_iso8601(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op)
+ngx_http_log_iso8601(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op, ngx_uint_t json)
 {
     return ngx_cpymem(buf, ngx_cached_http_log_iso8601.data,
                       ngx_cached_http_log_iso8601.len);
 }
 
 static u_char *
-ngx_http_log_msec(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op)
+ngx_http_log_msec(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op, ngx_uint_t json)
 {
     ngx_time_t  *tp;
 
@@ -769,7 +770,7 @@ ngx_http_log_msec(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op)
 
 static u_char *
 ngx_http_log_request_time(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op)
+    ngx_http_log_op_t *op, ngx_uint_t json)
 {
     ngx_time_t      *tp;
     ngx_msec_int_t   ms;
@@ -785,7 +786,7 @@ ngx_http_log_request_time(ngx_http_request_t *r, u_char *buf,
 
 
 static u_char *
-ngx_http_log_status(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op)
+ngx_http_log_status(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op, ngx_uint_t json)
 {
     ngx_uint_t  status;
 
@@ -808,7 +809,7 @@ ngx_http_log_status(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op)
 
 static u_char *
 ngx_http_log_bytes_sent(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op)
+    ngx_http_log_op_t *op, ngx_uint_t json)
 {
     return ngx_sprintf(buf, "%O", r->connection->sent);
 }
@@ -821,7 +822,7 @@ ngx_http_log_bytes_sent(ngx_http_request_t *r, u_char *buf,
 
 static u_char *
 ngx_http_log_body_bytes_sent(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op)
+    ngx_http_log_op_t *op, ngx_uint_t json)
 {
     off_t  length;
 
@@ -839,7 +840,7 @@ ngx_http_log_body_bytes_sent(ngx_http_request_t *r, u_char *buf,
 
 static u_char *
 ngx_http_log_request_length(ngx_http_request_t *r, u_char *buf,
-    ngx_http_log_op_t *op)
+    ngx_http_log_op_t *op, ngx_uint_t json)
 {
     return ngx_sprintf(buf, "%O", r->request_length);
 }
@@ -866,7 +867,7 @@ ngx_http_log_variable_compile(ngx_conf_t *cf, ngx_http_log_op_t *op,
 
 
 static size_t
-ngx_http_log_variable_getlen(ngx_http_request_t *r, uintptr_t data)
+ngx_http_log_variable_getlen(ngx_http_request_t *r, uintptr_t data, ngx_uint_t json)
 {
     uintptr_t                   len;
     ngx_http_variable_value_t  *value;
@@ -877,16 +878,20 @@ ngx_http_log_variable_getlen(ngx_http_request_t *r, uintptr_t data)
         return 1;
     }
 
-    len = ngx_http_log_escape(NULL, value->data, value->len);
+    len = ngx_http_log_escape(NULL, value->data, value->len, json);
 
     value->escape = len ? 1 : 0;
+
+    if (json) {
+        return value->len + len * 4;
+    }
 
     return value->len + len * 3;
 }
 
 
 static u_char *
-ngx_http_log_variable(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op)
+ngx_http_log_variable(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op, ngx_uint_t json)
 {
     ngx_http_variable_value_t  *value;
 
@@ -901,13 +906,13 @@ ngx_http_log_variable(ngx_http_request_t *r, u_char *buf, ngx_http_log_op_t *op)
         return ngx_cpymem(buf, value->data, value->len);
 
     } else {
-        return (u_char *) ngx_http_log_escape(buf, value->data, value->len);
+        return (u_char *) ngx_http_log_escape(buf, value->data, value->len, json);
     }
 }
 
 
 static uintptr_t
-ngx_http_log_escape(u_char *dst, u_char *src, size_t size)
+ngx_http_log_escape(u_char *dst, u_char *src, size_t size, ngx_uint_t json)
 {
     ngx_uint_t      n;
     static u_char   hex[] = "0123456789ABCDEF";
@@ -950,6 +955,9 @@ ngx_http_log_escape(u_char *dst, u_char *src, size_t size)
 
     while (size) {
         if (escape[*src >> 5] & (1 << (*src & 0x1f))) {
+            if (json) {
+                *dst++ = '\\';
+            }
             *dst++ = '\\';
             *dst++ = 'x';
             *dst++ = hex[*src >> 4];
@@ -1068,6 +1076,7 @@ ngx_http_log_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
     log->script = NULL;
     log->disk_full_time = 0;
     log->error_log_time = 0;
+    log->json = 0;
 
     lmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_log_module);
     fmt = lmcf->formats.elts;
@@ -1087,6 +1096,7 @@ ngx_http_log_set_log(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     ssize_t                     size;
     ngx_int_t                   gzip;
+    ngx_int_t                   json;
     ngx_uint_t                  i, n;
     ngx_msec_t                  flush;
     ngx_str_t                  *value, name, s;
@@ -1189,6 +1199,7 @@ ngx_http_log_set_log(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     size = 0;
     flush = 0;
     gzip = 0;
+    json = 0;
 
     for (i = 3; i < cf->args->nelts; i++) {
 
@@ -1255,6 +1266,12 @@ ngx_http_log_set_log(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 #endif
         }
 
+        if (ngx_strncmp(value[i].data, "json", 4) == 0)
+        {
+            json = 1;
+            continue;
+        }
+
         ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
                            "invalid parameter \"%V\"", &value[i]);
         return NGX_CONF_ERROR;
@@ -1265,6 +1282,10 @@ ngx_http_log_set_log(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
                            "no buffer is defined for access_log \"%V\"",
                            &value[1]);
         return NGX_CONF_ERROR;
+    }
+
+    if (json) {
+        log->json = 1;
     }
 
     if (size) {
